@@ -1,0 +1,23 @@
+name: CI — Server
+
+on:
+  push:
+    branches:
+      - dev/server
+      - master
+      - "feature/**"
+  pull_request:
+    branches:
+      - dev/server
+      - master
+
+jobs:
+  pipeline:
+    uses: biyrololo-and-ice-rider/ruscreen/.github/workflows/_reusable-go.yml@infrastructure
+    with:
+      go-version: "1.26"
+      image-name: ghcr.io/biyrololo-and-ice-rider/ruscreen/server
+      run-integration: false
+      run-e2e: false
+    secrets:
+      GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}

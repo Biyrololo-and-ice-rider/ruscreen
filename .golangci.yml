@@ -1,0 +1,40 @@
+run:
+  timeout: 5m
+  go: "1.22"
+
+linters:
+  enable:
+    - errcheck
+    - gosimple
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+    - goimports
+    - misspell
+    - revive
+    - wrapcheck
+    - depguard
+
+linters-settings:
+  depguard:
+    rules:
+      domain-isolation:
+        files:
+          - "**/domain/**"
+        deny:
+          - pkg: "github.com/biyrololo-and-ice-rider/ruscreen/internal/infra"
+            desc: "domain не должен импортировать infra"
+          - pkg: "github.com/biyrololo-and-ice-rider/ruscreen/internal/adapter"
+            desc: "domain не должен импортировать adapter"
+      usecase-isolation:
+        files:
+          - "**/usecase/**"
+        deny:
+          - pkg: "github.com/biyrololo-and-ice-rider/ruscreen/internal/infra"
+            desc: "usecase использует порты, а не infra напрямую"
+
+issues:
+  exclude-use-default: false
+  max-issues-per-linter: 0
+  max-same-issues: 0
