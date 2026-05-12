@@ -1,0 +1,82 @@
+name: "[reusable] CI Report"
+
+on:
+  workflow_call:
+    inputs:
+      service:
+        type: string
+        required: true
+      lint-result:
+        type: string
+        required: true
+      test-unit-result:
+        type: string
+        required: true
+      build-result:
+        type: string
+        required: true
+      docker-result:
+        type: string
+        required: true
+      image-tag:
+        type: string
+        default: "n/a"
+
+jobs:
+  report:
+    name: Summary
+    runs-on: ubuntu-latest
+    steps:
+      - name: Write job summary
+        run: |
+          STATUS_ICON() {
+            case "$1" in
+              success)  echo "✅" ;;
+              failure)  echo "❌" ;;
+              skipped)  echo "⏭️" ;;
+              *)        echo "⚠️" ;;
+            esac
+          }
+
+          LINT=$(STATUS_ICON "${{ inputs.lint-result }}")
+          UNIT=$(STATUS_ICON "${{ inputs.test-unit-result }}")
+          BUILD=$(STATUS_ICON "${{ inputs.build-result }}")
+          DOCKER=$(STATUS_ICON "${{ inputs.docker-result }}")
+
+          # Overall status
+          if [[ "${{ inputs.lint-result }}" == "success" && \
+                "${{ inputs.test-unit-result }}" == "success" && \
+                "${{ inputs.build-result }}" == "success" ]]; then
+            OVERALL="✅ PASSED"
+          else
+            OVERALL="❌ FAILED"
+          fi
+
+          cat >> "$GITHUB_STEP_SUMMARY" << EOF
+          # CI Report — ${{ inputs.service }}
+
+          **Overall:** ${OVERALL}
+
+          | Step | Result |
+          |---|---|
+          | Lint | ${LINT} ${{ inputs.lint-result }} |
+          | Unit Tests | ${UNIT} ${{ inputs.test-unit-result }} |
+          | Build | ${BUILD} ${{ inputs.build-result }} |
+          | Docker Push | ${DOCKER} ${{ inputs.docker-result }} |
+
+          **Image tag:** \`${{ inputs.image-tag }}\`
+
+          **Commit:** \`${{ github.sha }}\`
+          **Branch:** \`${{ github.ref_name }}\`
+          **Triggered by:** ${{ github.actor }}
+          **Run:** [${{ github.run_id }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+          EOF
+
+      - name: Fail if critical jobs failed
+        if: |
+          inputs.lint-result == 'failure' ||
+          inputs.test-unit-result == 'failure' ||
+          inputs.build-result == 'failure'
+        run: |
+          echo "❌ Critical CI step failed — blocking merge"
+          exit 1

@@ -1,0 +1,60 @@
+name: "[reusable] E2E Tests"
+
+# Заглушка для полного E2E прогона всего стека.
+# Будет вызываться вручную или из release pipeline когда бэк + фронт готовы.
+
+on:
+  workflow_call:
+    inputs:
+      backend-image:
+        description: "GHCR image для бэкенда"
+        type: string
+        required: true
+      frontend-image:
+        description: "GHCR image для фронтенда"
+        type: string
+        required: true
+      environment:
+        description: "staging | production"
+        type: string
+        default: "staging"
+    secrets:
+      GHCR_TOKEN:
+        required: true
+
+jobs:
+  e2e:
+    name: Full Stack E2E
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GHCR_TOKEN }}
+
+      # TODO: подменить docker-compose.e2e.yml на реальный файл со стеком
+      - name: Start full stack
+        run: |
+          echo "BACKEND_IMAGE=${{ inputs.backend-image }}" >> .env
+          echo "FRONTEND_IMAGE=${{ inputs.frontend-image }}" >> .env
+          # docker-compose -f docker-compose.e2e.yml up -d
+          echo "⚠️  E2E stack startup not implemented yet"
+
+      # TODO: добавить реальные тесты — Playwright, k6, или кастомный suite
+      - name: Run E2E suite
+        run: |
+          echo "⚠️  E2E tests not implemented yet"
+          echo "Варианты для реализации:"
+          echo "  - Playwright (браузерные сценарии)"
+          echo "  - k6 (нагрузочное + функциональное)"
+          echo "  - Go integration test package с тегом e2e"
+
+      - name: Teardown stack
+        if: always()
+        run: |
+          # docker-compose -f docker-compose.e2e.yml down -v
+          echo "Stack teardown placeholder"

@@ -1,0 +1,214 @@
+name: "[reusable] Node.js Frontend CI"
+
+on:
+  workflow_call:
+    inputs:
+      node-version:
+        description: "Node.js version"
+        type: string
+        default: "25"
+      image-name:
+        description: "GHCR image name, e.g. ghcr.io/org/meet-client"
+        type: string
+        required: true
+      run-e2e:
+        description: "Run E2E tests (Playwright)"
+        type: boolean
+        default: false
+    secrets:
+      GHCR_TOKEN:
+        required: true
+
+jobs:
+  # ── 1. Lint ──────────────────────────────────
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: ESLint
+        run: npm run lint
+
+      - name: TypeScript check
+        run: npm run typecheck
+
+  # ── 2. Unit tests ────────────────────────────
+  test-unit:
+    name: Unit Tests (Vitest)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run Vitest
+        run: npm run test -- --coverage
+
+      - name: Upload coverage
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-frontend
+          path: coverage/
+          retention-days: 7
+
+  # ── 3. E2E tests (Playwright, optional) ──────
+  test-e2e:
+    name: E2E Tests (Playwright)
+    runs-on: ubuntu-latest
+    if: ${{ inputs.run-e2e }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium
+
+      # TODO: поднять бэкенд-стек перед e2e
+      # - name: Start backend
+      #   run: docker-compose up -d
+      #   working-directory: ../
+
+      - name: Run Playwright
+        run: npx playwright test
+        # TODO: раскомментировать когда добавишь тесты
+        continue-on-error: true
+
+      - name: Upload Playwright report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: playwright-report
+          path: playwright-report/
+          retention-days: 7
+
+  # ── 4. Build (Vite) ───────────────────────────
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    needs: [lint, test-unit]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Vite build
+        run: npm run build
+
+      - name: Upload dist artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-dist
+          path: dist/
+          retention-days: 3
+
+  # ── 5. Docker build & push to GHCR ───────────
+  docker:
+    name: Docker → GHCR
+    runs-on: ubuntu-latest
+    needs: [build]
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image-tag: ${{ steps.meta.outputs.tags }}
+      image-digest: ${{ steps.push.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compute image tag
+        id: tag
+        run: |
+          REF="${GITHUB_REF}"
+          PR="${{ github.event.pull_request.number }}"
+
+          if [[ "$REF" == refs/tags/v* ]]; then
+            TAG="${REF#refs/tags/}"
+          elif [[ "$REF" == refs/heads/master || "$REF" == refs/heads/main ]]; then
+            TAG="stable"
+          elif [[ "$REF" == refs/heads/dev/client ]]; then
+            TAG="dev"
+          elif [[ -n "$PR" ]]; then
+            TAG="pr-${PR}"
+          else
+            SLUG="${REF#refs/heads/}"
+            SLUG="${SLUG//\//-}"
+            TAG="${SLUG}"
+          fi
+
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+
+      - name: Docker meta
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ inputs.image-name }}
+          tags: |
+            type=raw,value=${{ steps.tag.outputs.tag }}
+            type=sha,prefix=sha-,format=short
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }} 
+          password: ${{ secrets.GHCR_TOKEN }}
+
+      - name: Download dist artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: frontend-dist
+          path: dist/
+
+      - name: Build and push
+        id: push
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # ── 6. CI Report ─────────────────────────────
+  report:
+    name: CI Report
+    runs-on: ubuntu-latest
+    needs: [lint, test-unit, build, docker]
+    if: always()
+    uses: ./.github/workflows/_reusable-report.yml@infra
+    with:
+      service: "client (Node/React)"
+      lint-result: ${{ needs.lint.result }}
+      test-unit-result: ${{ needs.test-unit.result }}
+      build-result: ${{ needs.build.result }}
+      docker-result: ${{ needs.docker.result }}
+      image-tag: ${{ needs.docker.outputs.image-tag }}
