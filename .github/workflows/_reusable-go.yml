@@ -23,15 +23,6 @@ on:
       GHCR_TOKEN:
         required: true
 
-# ──────────────────────────────────────────────
-# Image tag strategy:
-#   branch dev/server     → dev
-#   branch master/main    → stable
-#   branch feature/*      → feature-<slug>
-#   tag    v*             → semver (v1.2.3)
-#   PR                    → pr-<number>
-# ──────────────────────────────────────────────
-
 jobs:
   # ── 1. Lint ──────────────────────────────────
   lint:
@@ -39,12 +30,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-go@v5
         with:
           go-version: ${{ inputs.go-version }}
           cache: true
-
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v4
         with:
@@ -56,15 +45,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-go@v5
         with:
           go-version: ${{ inputs.go-version }}
           cache: true
-
       - name: Run unit tests
         run: go test ./internal/domain/... ./internal/usecase/... -v -race -count=1 -coverprofile=coverage-unit.out
-
       - name: Upload unit coverage
         uses: actions/upload-artifact@v4
         with:
@@ -88,17 +74,14 @@ jobs:
           --health-retries 5
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-go@v5
         with:
           go-version: ${{ inputs.go-version }}
           cache: true
-
       - name: Run integration tests
         run: go test ./internal/infra/... ./internal/adapter/... -v -race -count=1 -tags=integration -coverprofile=coverage-integration.out
         env:
           REDIS_URL: redis://localhost:6379
-
       - name: Upload integration coverage
         uses: actions/upload-artifact@v4
         with:
@@ -106,17 +89,15 @@ jobs:
           path: coverage-integration.out
           retention-days: 7
 
-  # ── 4. E2E tests (stub, future) ──────────────
+  # ── 4. E2E tests (stub) ───────────────────────
   test-e2e:
     name: E2E Tests
     runs-on: ubuntu-latest
     if: ${{ inputs.run-e2e }}
     steps:
       - uses: actions/checkout@v4
-      # TODO: запустить docker-compose с полным стеком и гонять e2e сценарии
-      # Пример: newman (Postman), k6, или кастомный Go e2e пакет
       - name: E2E placeholder
-        run: echo "E2E tests not implemented yet — add your runner here"
+        run: echo "E2E tests not implemented yet"
 
   # ── 5. Build binary ──────────────────────────
   build:
@@ -125,15 +106,12 @@ jobs:
     needs: [lint, test-unit]
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-go@v5
         with:
           go-version: ${{ inputs.go-version }}
           cache: true
-
       - name: Build binary
         run: go build -o bin/meet ./cmd/server
-
       - name: Upload binary artifact
         uses: actions/upload-artifact@v4
         with:
@@ -150,8 +128,7 @@ jobs:
       contents: read
       packages: write
     outputs:
-      image-tag: ${{ steps.meta.outputs.tags }}
-      image-digest: ${{ steps.push.outputs.digest }}
+      image-tag: ${{ steps.tag.outputs.tag }}
     steps:
       - uses: actions/checkout@v4
 
@@ -162,7 +139,7 @@ jobs:
           PR="${{ github.event.pull_request.number }}"
 
           if [[ "$REF" == refs/tags/v* ]]; then
-            TAG="${REF#refs/tags/}"          # v1.2.3
+            TAG="${REF#refs/tags/}"
           elif [[ "$REF" == refs/heads/master || "$REF" == refs/heads/main ]]; then
             TAG="stable"
           elif [[ "$REF" == refs/heads/dev/server ]]; then
@@ -171,14 +148,14 @@ jobs:
             TAG="pr-${PR}"
           else
             SLUG="${REF#refs/heads/}"
-            SLUG="${SLUG//\//-}"             # feature/foo → feature-foo
+            SLUG="${SLUG//\//-}"
             TAG="${SLUG}"
           fi
 
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
           echo "Computed tag: ${TAG}"
 
-      - name: Docker meta (labels)
+      - name: Docker meta
         id: meta
         uses: docker/metadata-action@v5
         with:
@@ -205,17 +182,58 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-  # ── 7. CI Report ─────────────────────────────
   report:
     name: CI Report
     runs-on: ubuntu-latest
     needs: [lint, test-unit, build, docker]
     if: always()
-    uses: ./.github/workflows/_reusable-report.yml@infra
-    with:
-      service: "server (Go)"
-      lint-result: ${{ needs.lint.result }}
-      test-unit-result: ${{ needs.test-unit.result }}
-      build-result: ${{ needs.build.result }}
-      docker-result: ${{ needs.docker.result }}
-      image-tag: ${{ needs.docker.outputs.image-tag }}
+    steps:
+      - name: Write job summary
+        run: |
+          STATUS_ICON() {
+            case "$1" in
+              success)  echo "✅" ;;
+              failure)  echo "❌" ;;
+              skipped)  echo "⏭️" ;;
+              *)        echo "⚠️" ;;
+            esac
+          }
+
+          LINT=$(STATUS_ICON "${{ needs.lint.result }}")
+          UNIT=$(STATUS_ICON "${{ needs.test-unit.result }}")
+          BUILD=$(STATUS_ICON "${{ needs.build.result }}")
+          DOCKER=$(STATUS_ICON "${{ needs.docker.result }}")
+
+          if [[ "${{ needs.lint.result }}" == "success" && \
+                "${{ needs.test-unit.result }}" == "success" && \
+                "${{ needs.build.result }}" == "success" ]]; then
+            OVERALL="✅ PASSED"
+          else
+            OVERALL="❌ FAILED"
+          fi
+
+          cat >> "$GITHUB_STEP_SUMMARY" << EOF
+          # CI Report — server (Go)
+
+          **Overall:** ${OVERALL}
+
+          | Step | Result |
+          |---|---|
+          | Lint | ${LINT} ${{ needs.lint.result }} |
+          | Unit Tests | ${UNIT} ${{ needs.test-unit.result }} |
+          | Build | ${BUILD} ${{ needs.build.result }} |
+          | Docker Push | ${DOCKER} ${{ needs.docker.result }} |
+
+          **Image tag:** \`${{ needs.docker.outputs.image-tag }}\`
+          **Commit:** \`${{ github.sha }}\`
+          **Branch:** \`${{ github.ref_name }}\`
+          **Triggered by:** ${{ github.actor }}
+          **Run:** [${{ github.run_id }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+          EOF
+
+      - name: Fail if critical jobs failed
+        if: |
+          needs.lint.result == 'failure' ||
+          needs.test-unit.result == 'failure' ||
+          needs.build.result == 'failure'
+        run: exit 1

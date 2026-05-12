@@ -6,7 +6,7 @@ on:
       node-version:
         description: "Node.js version"
         type: string
-        default: "25"
+        default: "20"
       image-name:
         description: "GHCR image name, e.g. ghcr.io/org/meet-client"
         type: string
@@ -26,18 +26,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ inputs.node-version }}
           cache: "npm"
-
       - name: Install dependencies
         run: npm ci
-
       - name: ESLint
         run: npm run lint
-
       - name: TypeScript check
         run: npm run typecheck
 
@@ -47,18 +43,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ inputs.node-version }}
           cache: "npm"
-
       - name: Install dependencies
         run: npm ci
-
       - name: Run Vitest
         run: npm run test -- --coverage
-
       - name: Upload coverage
         uses: actions/upload-artifact@v4
         with:
@@ -73,28 +65,17 @@ jobs:
     if: ${{ inputs.run-e2e }}
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ inputs.node-version }}
           cache: "npm"
-
       - name: Install dependencies
         run: npm ci
-
       - name: Install Playwright browsers
         run: npx playwright install --with-deps chromium
-
-      # TODO: поднять бэкенд-стек перед e2e
-      # - name: Start backend
-      #   run: docker-compose up -d
-      #   working-directory: ../
-
       - name: Run Playwright
         run: npx playwright test
-        # TODO: раскомментировать когда добавишь тесты
         continue-on-error: true
-
       - name: Upload Playwright report
         uses: actions/upload-artifact@v4
         if: always()
@@ -103,25 +84,21 @@ jobs:
           path: playwright-report/
           retention-days: 7
 
-  # ── 4. Build (Vite) ───────────────────────────
+  # ── 4. Build (Vite) ──────────────────────────
   build:
     name: Build
     runs-on: ubuntu-latest
     needs: [lint, test-unit]
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ inputs.node-version }}
           cache: "npm"
-
       - name: Install dependencies
         run: npm ci
-
       - name: Vite build
         run: npm run build
-
       - name: Upload dist artifact
         uses: actions/upload-artifact@v4
         with:
@@ -138,8 +115,7 @@ jobs:
       contents: read
       packages: write
     outputs:
-      image-tag: ${{ steps.meta.outputs.tags }}
-      image-digest: ${{ steps.push.outputs.digest }}
+      image-tag: ${{ steps.tag.outputs.tag }}
     steps:
       - uses: actions/checkout@v4
 
@@ -164,6 +140,7 @@ jobs:
           fi
 
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "Computed tag: ${TAG}"
 
       - name: Docker meta
         id: meta
@@ -178,7 +155,7 @@ jobs:
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
-          username: ${{ github.actor }} 
+          username: ${{ github.actor }}
           password: ${{ secrets.GHCR_TOKEN }}
 
       - name: Download dist artifact
@@ -199,16 +176,60 @@ jobs:
           cache-to: type=gha,mode=max
 
   # ── 6. CI Report ─────────────────────────────
+  # NOTE: нельзя вызвать reusable workflow из reusable workflow —
+  # поэтому report встроен напрямую как обычный job
   report:
     name: CI Report
     runs-on: ubuntu-latest
     needs: [lint, test-unit, build, docker]
     if: always()
-    uses: ./.github/workflows/_reusable-report.yml@infra
-    with:
-      service: "client (Node/React)"
-      lint-result: ${{ needs.lint.result }}
-      test-unit-result: ${{ needs.test-unit.result }}
-      build-result: ${{ needs.build.result }}
-      docker-result: ${{ needs.docker.result }}
-      image-tag: ${{ needs.docker.outputs.image-tag }}
+    steps:
+      - name: Write job summary
+        run: |
+          STATUS_ICON() {
+            case "$1" in
+              success)  echo "✅" ;;
+              failure)  echo "❌" ;;
+              skipped)  echo "⏭️" ;;
+              *)        echo "⚠️" ;;
+            esac
+          }
+
+          LINT=$(STATUS_ICON "${{ needs.lint.result }}")
+          UNIT=$(STATUS_ICON "${{ needs.test-unit.result }}")
+          BUILD=$(STATUS_ICON "${{ needs.build.result }}")
+          DOCKER=$(STATUS_ICON "${{ needs.docker.result }}")
+
+          if [[ "${{ needs.lint.result }}" == "success" && \
+                "${{ needs.test-unit.result }}" == "success" && \
+                "${{ needs.build.result }}" == "success" ]]; then
+            OVERALL="✅ PASSED"
+          else
+            OVERALL="❌ FAILED"
+          fi
+
+          cat >> "$GITHUB_STEP_SUMMARY" << EOF
+          # CI Report — client (Node/React)
+
+          **Overall:** ${OVERALL}
+
+          | Step | Result |
+          |---|---|
+          | Lint | ${LINT} ${{ needs.lint.result }} |
+          | Unit Tests | ${UNIT} ${{ needs.test-unit.result }} |
+          | Build | ${BUILD} ${{ needs.build.result }} |
+          | Docker Push | ${DOCKER} ${{ needs.docker.result }} |
+
+          **Image tag:** \`${{ needs.docker.outputs.image-tag }}\`
+          **Commit:** \`${{ github.sha }}\`
+          **Branch:** \`${{ github.ref_name }}\`
+          **Triggered by:** ${{ github.actor }}
+          **Run:** [${{ github.run_id }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+          EOF
+
+      - name: Fail if critical jobs failed
+        if: |
+          needs.lint.result == 'failure' ||
+          needs.test-unit.result == 'failure' ||
+          needs.build.result == 'failure'
+        run: exit 1
