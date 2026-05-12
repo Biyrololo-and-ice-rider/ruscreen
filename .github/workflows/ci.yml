@@ -1,0 +1,23 @@
+name: CI — Client
+
+on:
+  push:
+    branches:
+      - dev/client
+      - master
+      - "feature/**"
+  pull_request:
+    branches:
+      - dev/client
+      - master
+
+jobs:
+  pipeline:
+    uses: biyrololo-and-ice-rider/ruscreen/.github/workflows/_reusable-node.yml@infrastructure
+    with:
+      node-version: "25"
+      image-name: ghcr.io/biyrololo-and-ice-rider/ruscreen/client
+      # Включить когда напишешь Playwright тесты:
+      run-e2e: false
+    secrets:
+      GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
