@@ -11,6 +11,10 @@ on:
       - dev/client
       - main
 
+permissions:
+  contents: read
+  packages: write
+
 jobs:
   pipeline:
     uses: biyrololo-and-ice-rider/ruscreen/.github/workflows/_reusable-node.yml@infrastructure
