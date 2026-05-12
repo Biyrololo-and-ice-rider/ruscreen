@@ -4,12 +4,12 @@ on:
   push:
     branches:
       - dev/client
-      - master
+      - main
       - "feature/**"
   pull_request:
     branches:
       - dev/client
-      - master
+      - main
 
 jobs:
   pipeline:
